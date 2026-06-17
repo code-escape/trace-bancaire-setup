@@ -56,6 +56,7 @@ EOF
 }
 
 install_service "soc-agent" "3000"
+install_service "tx-collector" "3100"
 
 systemctl daemon-reload
 

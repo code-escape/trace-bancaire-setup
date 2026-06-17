@@ -1,0 +1,13 @@
+{
+  "name": "tx-collector",
+  "version": "1.0.0",
+  "description": "Trace bancaire — collecteur SSE de transactions (épreuve 2, sse-flux-interrompu)",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

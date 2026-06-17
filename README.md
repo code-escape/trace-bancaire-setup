@@ -21,6 +21,9 @@ services/
   soc-agent/              # placeholder (socle) — GET /health → 200, port 3000
     package.json
     src/index.js
+  tx-collector/           # épreuve 2 (sse-flux-interrompu) — SSE + /checkin, port 3100
+    package.json
+    src/index.js
 .github/workflows/ci.yml  # lint + install/validation soc-agent sur linux/arm64
 ```
 
@@ -37,8 +40,22 @@ services/
 | Service | Port | Healthcheck | Statut |
 |---------|------|-------------|--------|
 | `soc-agent` | 3000 | `GET /health` → 200 | placeholder (13.0c) — endpoints ajoutés en 13.1+ |
+| `tx-collector` | 3100 | `GET /health` → 200 | épreuve 2 (13.1) — flux SSE `/stream`, `/checkin`, `/expected-volume`, ingest `/ingest` |
 
+> `soc-agent` (3000) et `tx-collector` (3100) coexistent dans la même sandbox trace-bancaire — ports distincts.
 > Le port 3000 est identique à `control-center` (Prométhée) : sans collision, un profil par sandbox.
+
+### `tx-collector` — sémantique du flux (épreuve 2)
+
+- `GET /stream` : SSE `text/event-stream`, événements `transaction` (id croissant), heartbeats `: keepalive`.
+  Coupe volontaire toutes les 30–90 s.
+- Reprise : `Last-Event-ID: N` → rejoue strictement les id > N puis live. **Sans** l'en-tête → pas de rejeu
+  du backlog (la fenêtre écoulée n'est pas redonnée), live uniquement → un client naïf perd des données.
+- `> 5` reconnexions/min (par IP) → `429` pendant 30 s.
+- `POST /checkin { ids: [...] }` : `200` si corpus complet, sinon `422 { "error": "corpus_incomplet" }`
+  (aucun id manquant divulgué — renforcement § E2). Le volume attendu n'est lisible que sur `GET /expected-volume`.
+- `GET /checkin/status` : consommé par le poller du juge (challenges-service).
+- `POST /ingest` : interne, alimenté par l'émetteur du challenges-service (corpus authoritative).
 
 ## Frontière base / bundle (NE PAS ré-implémenter)
 
