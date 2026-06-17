@@ -1,0 +1,58 @@
+name: CI — Trace bancaire bundle (arm64)
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint setup.sh
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntaxe setup.sh
+        run: bash -n setup.sh
+      - name: ShellCheck
+        run: |
+          sudo apt-get update && sudo apt-get install -y shellcheck
+          shellcheck setup.sh
+
+  validate-arm64:
+    name: Install bundle + soc-agent /health (linux/arm64)
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup QEMU (émulation arm64)
+        uses: docker/setup-qemu-action@v3
+
+      # La VM sandbox cible est ARM64 (Graviton) — on valide l'install sur l'arch réelle.
+      # systemd n'est pas disponible dans un conteneur CI : `systemctl` est stubbé ici
+      # (la validation systemd complète est faite localement, cf. tasks 6.x).
+      - name: Installer le bundle et vérifier soc-agent
+        run: |
+          docker run --rm --platform linux/arm64 -v "$PWD":/bundle node:22-bookworm \
+            bash -euo pipefail -c '
+              printf "#!/bin/bash\nexit 0\n" > /usr/local/bin/systemctl && chmod +x /usr/local/bin/systemctl
+              mkdir -p /etc/systemd/system
+              useradd -m cadet || true
+              # cloud-init clone le repo sous /opt/challenges puis exécute setup.sh
+              mkdir -p /opt/challenges && cp -rT /bundle /opt/challenges
+              /opt/challenges/setup.sh
+              test ! -e /opt/challenges || { echo "FAIL: /opt/challenges non nettoyé"; exit 1; }
+              test -f /etc/systemd/system/soc-agent.service || { echo "FAIL: unit absente"; exit 1; }
+              # soc-agent démarrable : on le lance et on vérifie GET /health → 200
+              ( PORT=3000 node /opt/soc-agent/src/index.js & )
+              for i in $(seq 1 10); do
+                code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/health || true)
+                [ "$code" = "200" ] && { echo "health 200 OK"; exit 0; }
+                sleep 1
+              done
+              echo "FAIL: /health != 200"; exit 1
+            '
