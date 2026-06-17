@@ -48,6 +48,7 @@ WorkingDirectory=${dst}
 ExecStart=/usr/bin/node src/index.js
 Restart=on-failure
 RestartSec=5
+EnvironmentFile=-/etc/sandbox.env
 Environment=PORT=${port}
 
 [Install]
@@ -55,15 +56,52 @@ WantedBy=multi-user.target
 EOF
 }
 
+# Postgres = dépendance d'infra de l'épreuve 3 (le dev requête le dataset en SQL via psql).
+# Contrairement aux services de scénario, PG est DÉMARRÉ ici (dépendance, pas service gated).
+# Idempotent : install conditionnelle, initdb gardé, rechargement propre du dataset.
+setup_postgres() {
+  echo "[setup][trace-bancaire] Postgres : installation + chargement du dataset AML"
+  # TEAM_ID (graine déterministe) vient de /etc/sandbox.env — même graine que le service tx-dataset.
+  set -a; . /etc/sandbox.env 2>/dev/null || true; set +a
+  command -v psql >/dev/null 2>&1 || \
+    dnf install -y --allowerasing --setopt=install_weak_deps=False postgresql-server postgresql >/dev/null 2>&1
+  [ -f /var/lib/pgsql/data/PG_VERSION ] || postgresql-setup --initdb >/dev/null 2>&1
+  systemctl enable postgresql >/dev/null 2>&1 || true
+  systemctl start postgresql
+  until pg_isready -q 2>/dev/null; do sleep 0.2; done
+
+  # DB + rôle cadet (peer auth : l'utilisateur OS cadet → rôle PG cadet) en lecture seule.
+  runuser -u postgres -- psql -tAc "SELECT 1 FROM pg_database WHERE datname='aml'" | grep -q 1 \
+    || runuser -u postgres -- psql -q -c "CREATE DATABASE aml"
+  runuser -u postgres -- psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='cadet'" | grep -q 1 \
+    || runuser -u postgres -- psql -q -c "CREATE ROLE cadet LOGIN"
+  runuser -u postgres -- psql -q -c "GRANT CONNECT ON DATABASE aml TO cadet"
+
+  # Génère le CSV déterministe (même seed = TEAM_ID que l'API) puis chargement propre (COPY).
+  node /opt/tx-dataset/src/load-dataset.js /tmp/aml-tx.csv
+  chmod 644 /tmp/aml-tx.csv
+  runuser -u postgres -- psql -q aml -c "DROP TABLE IF EXISTS transactions"
+  runuser -u postgres -- psql -q aml -c "CREATE TABLE transactions (id bigint PRIMARY KEY, amount numeric, counterparty text, ts timestamptz)"
+  runuser -u postgres -- psql -q aml -c "\copy transactions FROM '/tmp/aml-tx.csv' WITH (FORMAT csv)"
+  runuser -u postgres -- psql -q aml -c "CREATE INDEX ON transactions(counterparty)"
+  runuser -u postgres -- psql -q aml -c "CREATE INDEX ON transactions(ts)"
+  runuser -u postgres -- psql -q aml -c "GRANT SELECT ON transactions TO cadet"
+  rm -f /tmp/aml-tx.csv
+  echo "[setup][trace-bancaire] Postgres prêt (db 'aml', table 'transactions', lecture pour 'cadet')."
+}
+
 install_service "soc-agent" "3000"
 install_service "tx-collector" "3100"
+install_service "tx-dataset" "3200"
 
 systemctl daemon-reload
 
-# Convention healthcheck du contrat : soc-agent expose GET /health → 200 (src/index.js).
-# Logs : journalctl -u soc-agent.
+# Convention healthcheck du contrat : chaque service expose GET /health → 200 (src/index.js).
+# Logs : journalctl -u <service>.
+
+setup_postgres
 
 # Nettoyage : aucune trace du provisionnement (idempotent grâce à -f).
 rm -rf /opt/challenges
 
-echo "[setup][trace-bancaire] services installés (non démarrés). OK."
+echo "[setup][trace-bancaire] services installés (non démarrés), Postgres chargé. OK."

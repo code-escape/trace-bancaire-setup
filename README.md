@@ -41,6 +41,14 @@ services/
 |---------|------|-------------|--------|
 | `soc-agent` | 3000 | `GET /health` → 200 | placeholder (13.0c) — endpoints ajoutés en 13.1+ |
 | `tx-collector` | 3100 | `GET /health` → 200 | épreuve 2 (13.1) — flux SSE `/stream`, `/checkin`, `/expected-volume`, ingest `/ingest` |
+| `tx-dataset` | 3200 | `GET /health` → 200 | épreuve 3 (13.2) — dataset AML : `/transactions` (paginé, brut), `/recent`, `/policy` + `/kyc/:account` (GUI-only) |
+
+`setup.sh` installe aussi **Postgres** (dépendance d'infra de l'épreuve 3) : base `aml`, table
+`transactions` (~100k lignes calibrées, déterministes par `TEAM_ID`), accessible en lecture au user
+`cadet` via `psql aml`. Le dataset Postgres et l'API `tx-dataset` dérivent de la même spec
+déterministe (`services/tx-dataset/src/dataset-spec.js`) — la politique AML et les dossiers KYC sont
+servis **uniquement** par `tx-dataset` (jamais en base ni dans `/transactions`), préservant
+l'asymétrie d'information dev/analyste.
 
 > `soc-agent` (3000) et `tx-collector` (3100) coexistent dans la même sandbox trace-bancaire — ports distincts.
 > Le port 3000 est identique à `control-center` (Prométhée) : sans collision, un profil par sandbox.
