@@ -1,0 +1,17 @@
+{
+  "name": "payments",
+  "version": "1.0.0",
+  "description": "Trace bancaire — pipeline de virements rejouable (consumer naïf) + harnais de vérif (épreuve 4)",
+  "main": "src/consumer.js",
+  "scripts": {
+    "start": "node src/consumer.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "pg": "^8.11.3",
+    "redis": "^4.6.13"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

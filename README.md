@@ -24,7 +24,12 @@ services/
   tx-collector/           # épreuve 2 (sse-flux-interrompu) — SSE + /checkin, port 3100
     package.json
     src/index.js
-.github/workflows/ci.yml  # lint + install/validation soc-agent sur linux/arm64
+  tx-dataset/             # épreuve 3 (detection-structuring-aml) — dataset AML, port 3200
+  payments/               # épreuve 4 (idempotence-virements-rejoues) — consumer + probe
+    src/{consumer,probe,db,ledger-spec,load}.js
+    tests/{ledger-spec,consumer,probe}.test.js
+trigger-replay.sh         # outil joueur (épreuve 4) — rejoue le flux depuis le début
+.github/workflows/ci.yml  # lint + tests services + install/validation soc-agent sur linux/arm64
 ```
 
 ## `setup.sh`
@@ -42,6 +47,26 @@ services/
 | `soc-agent` | 3000 | `GET /health` → 200 | placeholder (13.0c) — endpoints ajoutés en 13.1+ |
 | `tx-collector` | 3100 | `GET /health` → 200 | épreuve 2 (13.1) — flux SSE `/stream`, `/checkin`, `/expected-volume`, ingest `/ingest` |
 | `tx-dataset` | 3200 | `GET /health` → 200 | épreuve 3 (13.2) — dataset AML : `/transactions` (paginé, brut), `/recent`, `/policy` + `/kyc/:account` (GUI-only) |
+| `payments-consumer` | — | (worker, pas d'HTTP) | épreuve 4 (13.3) — consume le Stream `virements`, INSERT **naïf** dans `ledger` (gated) |
+| `payments-probe` | 3400 | `GET /health` → 200 | épreuve 4 (13.3) — `POST /replay-probe` (mesures brutes), `GET /reconciliation` (gated) |
+
+### Épreuve 4 — « Le virement en double » (idempotence)
+
+`setup.sh` installe **Redis** (bus `virements`, Stream + groupe `payments`) et seede une base
+Postgres `payments` **possédée par `cadet`** : table `ledger` **sans colonne `message_id`** (la
+migration est le travail du joueur), pré-remplie de ~200 écritures légitimes — dont une **paire
+jumelle** volontaire (même `from`/`to`/`amount`, `messageId` distincts) — et ~30 **doublons
+historiques** (rejeux passés). Déterministe par `TEAM_ID` via `services/payments/src/ledger-spec.js`.
+
+- `payments-consumer` lit le groupe (`XREADGROUP '>'`) et fait un INSERT **sans clé d'idempotence** :
+  un rejeu re-livre tout le flux → doublons. Le `messageId` est logué (`journalctl`) mais pas dédupliqué.
+- `trigger-replay.sh` (dans `/home/cadet`) repositionne le groupe au début (`XGROUP SETID … 0`) puis
+  redémarre le consumer — rejeu **rejouable à volonté** par le joueur.
+- `payments-probe` (user `cadet`, `sudo` ciblé sur `systemctl restart payments-consumer`) exécute le
+  replay contrôlé et renvoie des **mesures brutes** (`countBefore/After`, présence d'une contrainte
+  UNIQUE d'idempotence par introspection, totaux attendus vs observés). **Aucun verdict** : la décision
+  appartient au juge plateforme (`challenges-service`, `POST /api/v1/challenges/payments/verify`).
+- `GET /reconciliation` expose attendu vs observé par compte (feedback GUI, 13.5).
 
 `setup.sh` installe aussi **Postgres** (dépendance d'infra de l'épreuve 3) : base `aml`, table
 `transactions` (~100k lignes calibrées, déterministes par `TEAM_ID`), accessible en lecture au user

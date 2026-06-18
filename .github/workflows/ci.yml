@@ -22,6 +22,24 @@ jobs:
           sudo apt-get update && sudo apt-get install -y shellcheck
           shellcheck setup.sh
 
+  unit-tests:
+    name: Tests services (node:test)
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      # Specs déterministes + logique des services, sans dépendance systemd/PG/Redis
+      # (clients injectés en test). `payments` porte le contrat interne de l'épreuve 4.
+      - name: node --test (tx-collector, tx-dataset, payments)
+        run: |
+          for svc in tx-collector tx-dataset payments; do
+            echo "== ${svc} =="
+            ( cd "services/${svc}" && node --test )
+          done
+
   validate-arm64:
     name: Install bundle + soc-agent /health (linux/arm64)
     runs-on: ubuntu-latest
