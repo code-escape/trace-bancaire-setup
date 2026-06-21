@@ -11,12 +11,39 @@
 # /opt/challenges.
 #
 # Frontière base/bundle : l'accès SSH (user cadet, sshd:2222, AuthorizedKeysCommand,
-# hook PAM ssh-notify, /etc/sandbox.env, MOTD/banner) est fourni par la composition.
+# hook PAM ssh-notify, /etc/sandbox.env) est fourni par la composition. La base fournit
+# un MOTD/banner NEUTRE ; l'habillage narratif du MOTD est posé par CE bundle (contrat §6).
 # Ce bundle ne configure JAMAIS sshd/PAM/AKC.
 # ──────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
 BUNDLE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# MOTD narratif Trace bancaire — remplace le /etc/motd.template neutre de la base, puis
+# régénère /etc/motd via l'init-motd.sh de la base (BOOT_TIME + BOOT_SESSION_ID).
+# Idempotent (réécriture complète). Posé par le bundle pour rester ISO AWS/local.
+cat > /etc/motd.template << 'MOTDEOF'
+================================================================
+  SOC — CELLULE DE CRISE FRAUDE
+  Salle des marchés · Poste analyste
+================================================================
+
+  Authentification opérateur : VALIDÉE
+  ID session                : INC-BOOT_SESSION_ID
+  Heure locale              : BOOT_TIME
+  Cut-off SWIFT             : T-03:00:00
+
+----------------------------------------------------------------
+  ALERTE  —  EXFILTRATION EN COURS
+----------------------------------------------------------------
+  Détection      : micro-transactions sous seuil (structuring présumé)
+  Comptes mules  : non identifiés
+  Collecteur tx  : DÉGRADÉ (flux temps réel instable)
+  Grand livre    : incohérent (doublons constatés)
+
+  Outils opérateur : /opt/ops-tools/
+MOTDEOF
+[ -x /usr/local/bin/init-motd.sh ] && /usr/local/bin/init-motd.sh || true
 
 # Service placeholder du socle (épreuves 13.1+ ajouteront leurs services ici).
 install_service() {
@@ -98,7 +125,10 @@ setup_postgres() {
   fi
   # TEAM_ID (graine déterministe) vient de /etc/sandbox.env — même graine que le service tx-dataset.
   set -a; . /etc/sandbox.env 2>/dev/null || true; set +a
-  command -v psql >/dev/null 2>&1 || \
+  # Le SERVEUR (postgresql-server, qui fournit `postgresql-setup`) est requis pour initdb.
+  # Le client `psql` est pré-installé par la base (cloud-init / image) : tester sa présence
+  # NE garantit PAS le serveur. On gate donc sur `postgresql-setup` (binaire du serveur).
+  command -v postgresql-setup >/dev/null 2>&1 || \
     dnf install -y --allowerasing --setopt=install_weak_deps=False postgresql-server postgresql >/dev/null 2>&1
   [ -f /var/lib/pgsql/data/PG_VERSION ] || postgresql-setup --initdb >/dev/null 2>&1
   systemctl enable postgresql >/dev/null 2>&1 || true
